@@ -33,6 +33,7 @@
                 fenix.packages.${system}.minimal.toolchain;
             in
               craneLib.buildPackage {
+                nativeBuildInputs = with pkgs; [pkg-config openssl];
                 src = ./.;
               };
         };
