@@ -54,7 +54,10 @@ fn p_cat_file(blob_sha: &str) -> Result<()> {
     let mut decompressor = flate2::read::ZlibDecoder::new(&content[..]);
     let mut result = String::new();
     decompressor.read_to_string(&mut result)?;
-    print!("{result}");
+    let (header, content) = result
+        .split_once("\0")
+        .ok_or(anyhow::anyhow!("Couldn't parse git object {blob_sha}"))?;
+    print!("{content}");
     Ok(())
 }
 
