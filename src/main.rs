@@ -2,11 +2,13 @@
 use std::env;
 #[allow(unused_imports)]
 use std::fs;
-use std::io::Read;
+use std::fs::File;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use sha1::{Digest, Sha1};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -33,6 +35,10 @@ enum Commands {
     CatFile {
         #[arg(short = 'p')]
         blob_sha: String,
+    },
+    HashObject {
+        #[arg(short = 'w')]
+        file: String,
     },
 }
 
@@ -61,6 +67,41 @@ fn p_cat_file(blob_sha: &str) -> Result<()> {
     Ok(())
 }
 
+fn create_blob(content: Vec<u8>) -> Result<Vec<u8>> {
+    let len = content.len();
+    let mut blob: Vec<u8> = format!("blob {len}\0").into_bytes();
+    blob.append(&mut content.clone());
+    Ok(blob)
+}
+
+fn hash_blob(blob: Vec<u8>) -> Result<String> {
+    let mut hasher = Sha1::new();
+    hasher.update(blob);
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn p_hash_object(file: &str) -> Result<()> {
+    let content = fs::read(file)?;
+    let blob = create_blob(content)?;
+    let hash = hash_blob(blob.clone())?;
+    let mut compressor = flate2::read::ZlibEncoder::new(
+        std::io::Cursor::new(blob.clone()),
+        flate2::Compression::fast(),
+    );
+    let mut result = Vec::new();
+    compressor.read_to_end(&mut result)?;
+    let path = ".git/objects/".to_string()
+        + hash.chars().take(2).collect::<String>().as_str()
+        + "/"
+        + hash.chars().skip(2).collect::<String>().as_str();
+    let mut file = File::create(path)?;
+    file.write_all(&result)?;
+    // println!("{}", hash_blob(result)?);
+    // todo!()
+    println!("{hash}");
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     // You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -69,5 +110,6 @@ fn main() -> Result<()> {
     match &cli.command {
         Commands::Init => g_init(),
         Commands::CatFile { blob_sha } => p_cat_file(blob_sha),
+        Commands::HashObject { file } => p_hash_object(file),
     }
 }
