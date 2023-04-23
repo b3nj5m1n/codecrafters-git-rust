@@ -60,7 +60,7 @@ fn p_cat_file(blob_sha: &str) -> Result<()> {
     let mut decompressor = flate2::read::ZlibDecoder::new(&content[..]);
     let mut result = String::new();
     decompressor.read_to_string(&mut result)?;
-    let (header, content) = result
+    let (_, content) = result
         .split_once("\0")
         .ok_or(anyhow::anyhow!("Couldn't parse git object {blob_sha}"))?;
     print!("{content}");
@@ -81,10 +81,15 @@ fn hash_blob(blob: Vec<u8>) -> Result<String> {
 }
 
 fn p_hash_object(file: &PathBuf) -> Result<()> {
+    println!("p_hash_object got called");
     anyhow::ensure!(file.exists());
+    println!("Path exists");
     let content = fs::read(file)?;
+    println!("Read content");
     let blob = create_blob(content)?;
+    println!("Created blob");
     let hash = hash_blob(blob.clone())?;
+    println!("Hashed blob");
     let mut compressor = flate2::read::ZlibEncoder::new(
         std::io::Cursor::new(blob.clone()),
         flate2::Compression::fast(),
