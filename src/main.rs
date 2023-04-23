@@ -81,6 +81,7 @@ fn hash_blob(blob: Vec<u8>) -> Result<String> {
 }
 
 fn p_hash_object(file: &PathBuf) -> Result<()> {
+    anyhow::ensure!(file.exists());
     let content = fs::read(file)?;
     let blob = create_blob(content)?;
     let hash = hash_blob(blob.clone())?;
