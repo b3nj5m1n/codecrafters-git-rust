@@ -91,13 +91,11 @@ fn p_hash_object(file: &PathBuf) -> Result<()> {
     );
     let mut result = Vec::new();
     compressor.read_to_end(&mut result)?;
-    let path = ".git/objects/".to_string()
-        + hash.chars().take(2).collect::<String>().as_str()
-        + "/"
-        + hash.chars().skip(2).collect::<String>().as_str();
-    println!("Object path: {path}");
+    let base_path =
+        ".git/objects/".to_string() + hash.chars().take(2).collect::<String>().as_str() + "/";
+    std::fs::create_dir_all(&base_path);
+    let path = base_path + hash.chars().skip(2).collect::<String>().as_str();
     let mut file = File::create(path)?;
-    println!("Wrote file");
     file.write_all(&result)?;
     // println!("{}", hash_blob(result)?);
     // todo!()
