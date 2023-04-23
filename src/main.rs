@@ -38,7 +38,7 @@ enum Commands {
     },
     HashObject {
         #[arg(short = 'w')]
-        file: String,
+        file: PathBuf,
     },
 }
 
@@ -80,7 +80,7 @@ fn hash_blob(blob: Vec<u8>) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-fn p_hash_object(file: &str) -> Result<()> {
+fn p_hash_object(file: &PathBuf) -> Result<()> {
     let content = fs::read(file)?;
     let blob = create_blob(content)?;
     let hash = hash_blob(blob.clone())?;
