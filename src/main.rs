@@ -81,15 +81,10 @@ fn hash_blob(blob: Vec<u8>) -> Result<String> {
 }
 
 fn p_hash_object(file: &PathBuf) -> Result<()> {
-    println!("p_hash_object got called");
     anyhow::ensure!(file.exists());
-    println!("Path exists");
     let content = fs::read(file)?;
-    println!("Read content");
     let blob = create_blob(content)?;
-    println!("Created blob");
     let hash = hash_blob(blob.clone())?;
-    println!("Hashed blob");
     let mut compressor = flate2::read::ZlibEncoder::new(
         std::io::Cursor::new(blob.clone()),
         flate2::Compression::fast(),
@@ -100,7 +95,9 @@ fn p_hash_object(file: &PathBuf) -> Result<()> {
         + hash.chars().take(2).collect::<String>().as_str()
         + "/"
         + hash.chars().skip(2).collect::<String>().as_str();
+    println!("Object path: {path}");
     let mut file = File::create(path)?;
+    println!("Wrote file");
     file.write_all(&result)?;
     // println!("{}", hash_blob(result)?);
     // todo!()
