@@ -51,62 +51,130 @@ fn g_init() -> Result<()> {
     Ok(())
 }
 
+fn sha_to_path(sha: &str) -> Result<PathBuf> {
+    let mut result = PathBuf::from(".git/objects/");
+    result.push(sha.chars().take(2).collect::<String>());
+    result.push(sha.chars().skip(2).collect::<String>());
+    Ok(result)
+}
+
 fn p_cat_file(blob_sha: &str) -> Result<()> {
-    let path = ".git/objects/".to_string()
-        + blob_sha.chars().take(2).collect::<String>().as_str()
-        + "/"
-        + blob_sha.chars().skip(2).collect::<String>().as_str();
+    let path = sha_to_path(blob_sha)?;
     let content = fs::read(path)?;
-    let mut decompressor = flate2::read::ZlibDecoder::new(&content[..]);
-    let mut result = String::new();
-    decompressor.read_to_string(&mut result)?;
-    let (_, content) = result
-        .split_once("\0")
-        .ok_or(anyhow::anyhow!("Couldn't parse git object {blob_sha}"))?;
-    print!("{content}");
+    let object = Object::try_from(content)?;
+    print!("{}", object.content);
     Ok(())
 }
 
-fn create_blob(content: Vec<u8>) -> Result<Vec<u8>> {
-    let len = content.len();
-    let mut blob: Vec<u8> = format!("blob {len}\0").into_bytes();
-    blob.append(&mut content.clone());
-    Ok(blob)
+#[derive(Clone)]
+struct Object {
+    object_type: ObjectType,
+    size: usize,
+    content: String,
 }
 
-fn hash_blob(blob: Vec<u8>) -> Result<String> {
-    let mut hasher = Sha1::new();
-    hasher.update(blob);
-    Ok(hex::encode(hasher.finalize()))
+impl Object {
+    fn new(object_type: ObjectType, content: String) -> Self {
+        Self {
+            object_type,
+            size: content.len(),
+            content,
+        }
+    }
+    fn new_blob(content: String) -> Self {
+        Self::new(ObjectType::Blob, content)
+    }
+    fn hash(&self) -> String {
+        let mut hasher = Sha1::new();
+        hasher.update(Into::<Vec<u8>>::into(self.clone()));
+        hex::encode(hasher.finalize())
+    }
+    fn compress(&self) -> Result<Vec<u8>> {
+        let mut compressor = flate2::read::ZlibEncoder::new(
+            std::io::Cursor::new(Into::<Vec<u8>>::into(self.clone())),
+            flate2::Compression::fast(),
+        );
+        let mut result = Vec::new();
+        compressor.read_to_end(&mut result)?;
+        Ok(result)
+    }
+}
+
+impl Into<Vec<u8>> for Object {
+    fn into(self) -> Vec<u8> {
+        format!(
+            "{0} {1}\0{2}",
+            self.object_type.to_string(),
+            self.size,
+            self.content
+        )
+        .into_bytes()
+    }
+}
+
+impl TryFrom<Vec<u8>> for Object {
+    type Error = anyhow::Error;
+
+    fn try_from(value: Vec<u8>) -> std::result::Result<Self, Self::Error> {
+        let mut decompressor = flate2::read::ZlibDecoder::new(&value[..]);
+        let mut result = String::new();
+        decompressor.read_to_string(&mut result)?;
+        let (header, content) = result
+            .split_once("\0")
+            .ok_or(anyhow::anyhow!("Couldn't parse git object"))?;
+        let (object_type_str, size_str) = header.split_once(" ").ok_or(anyhow::anyhow!(
+            "Couldn't parse git object header: {header}"
+        ))?;
+        let size = size_str.parse::<usize>()?;
+        let object_type = ObjectType::try_from(object_type_str)?;
+        Ok(Self {
+            object_type,
+            size,
+            content: content.to_string(),
+        })
+    }
+}
+
+#[derive(Clone)]
+enum ObjectType {
+    Blob,
+}
+
+impl ToString for ObjectType {
+    fn to_string(&self) -> String {
+        match self {
+            ObjectType::Blob => String::from("blob"),
+        }
+    }
+}
+
+impl TryFrom<&str> for ObjectType {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+        match value {
+            "blob" => Ok(Self::Blob),
+            _ => anyhow::bail!("Couldn't determine object type: {}", value.to_string()),
+        }
+    }
 }
 
 fn p_hash_object(file: &PathBuf) -> Result<()> {
     anyhow::ensure!(file.exists());
     let content = fs::read(file)?;
-    let blob = create_blob(content)?;
-    let hash = hash_blob(blob.clone())?;
-    let mut compressor = flate2::read::ZlibEncoder::new(
-        std::io::Cursor::new(blob.clone()),
-        flate2::Compression::fast(),
-    );
-    let mut result = Vec::new();
-    compressor.read_to_end(&mut result)?;
-    let base_path =
-        ".git/objects/".to_string() + hash.chars().take(2).collect::<String>().as_str() + "/";
-    std::fs::create_dir_all(&base_path);
-    let path = base_path + hash.chars().skip(2).collect::<String>().as_str();
+    let object = Object::new_blob(std::string::String::from_utf8(content)?);
+    let hash = object.hash();
+    let compressed = object.compress()?;
+    let path = sha_to_path(&hash)?;
+    std::fs::create_dir_all(&path.parent().ok_or(anyhow::anyhow!("Unreachable"))?);
     let mut file = File::create(path)?;
-    file.write_all(&result)?;
-    // println!("{}", hash_blob(result)?);
-    // todo!()
+    file.write_all(&compressed)?;
     println!("{hash}");
     Ok(())
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    // You can use print statements as follows for debugging, they'll be visible when running tests.
-    // println!("Logs from your program will appear here!");
 
     match &cli.command {
         Commands::Init => g_init(),
