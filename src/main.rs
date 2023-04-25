@@ -364,7 +364,7 @@ fn p_write_tree(dir: PathBuf) -> Result<String> {
             .to_string();
         let mode = std::fs::metadata(path.path())?.permissions().mode();
         let mode = if path.path().is_dir() {
-            "040000".to_string()
+            "40000".to_string()
         } else {
             format!("{:o}", mode)
         };
