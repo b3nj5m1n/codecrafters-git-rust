@@ -40,6 +40,12 @@ enum Commands {
         #[arg(short = 'w')]
         file: PathBuf,
     },
+    LsTree {
+        #[clap(long, short, action)]
+        name_only: bool,
+
+        sha: String,
+    },
 }
 
 fn g_init() -> Result<()> {
@@ -56,15 +62,6 @@ fn sha_to_path(sha: &str) -> Result<PathBuf> {
     result.push(sha.chars().take(2).collect::<String>());
     result.push(sha.chars().skip(2).collect::<String>());
     Ok(result)
-}
-
-fn p_cat_file(blob_sha: &str) -> Result<()> {
-    let path = sha_to_path(blob_sha)?;
-    let content = fs::read(path)?;
-    let object = Object::try_from(content)?;
-    std::io::stdout().write_all(&object.content)?;
-    // print!("{}", String::from_utf8(object.content));
-    Ok(())
 }
 
 #[derive(Clone)]
@@ -118,13 +115,29 @@ impl TryFrom<Vec<u8>> for Object {
         let mut result: Vec<u8> = Vec::new(); // String::new();
         decompressor.read_to_end(&mut result)?;
         // decompressor.read_to_string(&mut result)?;
-        let (header, content) = result.split_at(
-            result
-                .iter()
-                .position(|&x| x == 0_u8)
-                .ok_or(anyhow::anyhow!("Couldn't parse header of object"))?,
-        );
-        let header = String::from_utf8(header.to_vec())?;
+        // let mut split = result.split(|&x| x == 0_u8);
+        // let header = String::from_utf8(
+        //     split
+        //         .next()
+        //         .ok_or(anyhow::anyhow!("Couldn't parse git object header"))?
+        //         .to_vec(),
+        // )?;
+        let i = result
+            .iter()
+            .position(|x| *x == 0_u8)
+            .ok_or(anyhow::anyhow!("Couldn't parse git object header"))?;
+        let header = String::from_utf8(result.drain(0..i).collect())?;
+        let content: Vec<u8> = result.into_iter().skip(1).collect();
+        // let content: Vec<u8> = split.flatten().map(|&x| x).collect();
+        // .next()
+        // .ok_or(anyhow::anyhow!("Couldn't parse git object header"))?;
+        // let (header, content) = result.split_at(
+        //     result
+        //         .iter()
+        //         .position(|&x| x == 0_u8)
+        //         .ok_or(anyhow::anyhow!("Couldn't parse header of object"))?,
+        // );
+        // let header = String::from_utf8(header.to_vec())?;
 
         // .split_once(\0)
         // .ok_or(anyhow::anyhow!("Couldn't parse git object"))?;
@@ -136,7 +149,7 @@ impl TryFrom<Vec<u8>> for Object {
         Ok(Self {
             object_type,
             size,
-            content: content.to_vec(),
+            content,
         })
     }
 }
@@ -171,6 +184,15 @@ impl TryFrom<&str> for ObjectType {
     }
 }
 
+fn p_cat_file(blob_sha: &str) -> Result<()> {
+    let path = sha_to_path(blob_sha)?;
+    let content = fs::read(path)?;
+    let object = Object::try_from(content)?;
+    std::io::stdout().write_all(&object.content)?;
+    // print!("{}", String::from_utf8(object.content));
+    Ok(())
+}
+
 fn p_hash_object(file: &PathBuf) -> Result<()> {
     anyhow::ensure!(file.exists());
     let content = fs::read(file)?;
@@ -185,6 +207,49 @@ fn p_hash_object(file: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+struct TreeFile {
+    mode: String,
+    name: String,
+    sha: String,
+}
+
+fn p_ls_tree(name_only: bool, sha: &str) -> Result<()> {
+    let path = sha_to_path(sha)?;
+    let content = fs::read(path)?;
+    let mut object = Object::try_from(content)?;
+    if !matches!(object.object_type, ObjectType::Tree) {
+        anyhow::bail!("Sha doesn't point to tree object");
+    }
+    let mut files = Vec::new();
+    loop {
+        let i = match object.content.iter().position(|x| *x == 0_u8) {
+            Some(i) => i,
+            None => break,
+        };
+        let file_header_bytes: Vec<u8> = object.content.drain(0..i).collect();
+        let file_header: String = String::from_utf8(file_header_bytes)?;
+        // let file_header: String =
+        //     String::from_utf8(object.content.drain(0..i).collect::<Vec<u8>>().clone())?;
+        let (file_mode, file_name) = file_header
+            .split_once(" ")
+            .ok_or(anyhow::anyhow!("Couldn't parse file header in tree object"))?;
+        object.content.drain(0..1);
+        let file_sha: Vec<_> = object.content.drain(0..20).collect();
+        files.push(TreeFile {
+            mode: file_mode.to_string(),
+            name: file_name.to_string(),
+            sha: sha.to_string(),
+        })
+        // files.push((file_mode.clone(), file_name.clone(), hex::encode(file_sha)));
+        // files.push(String::from_utf8(file_header)?);
+    }
+    for file in files {
+        println!("{}", file.name);
+    }
+    // dbg!(files);
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -192,5 +257,6 @@ fn main() -> Result<()> {
         Commands::Init => g_init(),
         Commands::CatFile { blob_sha } => p_cat_file(blob_sha),
         Commands::HashObject { file } => p_hash_object(file),
+        Commands::LsTree { name_only, sha } => p_ls_tree(*name_only, sha),
     }
 }
