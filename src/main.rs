@@ -4,6 +4,7 @@ use std::env;
 use std::fs;
 use std::fs::File;
 use std::io::{Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -46,6 +47,8 @@ enum Commands {
 
         sha: String,
     },
+    WriteTree,
+    Root,
 }
 
 fn g_init() -> Result<()> {
@@ -57,8 +60,35 @@ fn g_init() -> Result<()> {
     Ok(())
 }
 
+fn get_repo_root(dir: PathBuf) -> Result<PathBuf> {
+    let dir = dir.canonicalize()?;
+    let paths = std::fs::read_dir(dir.clone())?
+        .into_iter()
+        .collect::<std::result::Result<Vec<_>, std::io::Error>>()?;
+    let mut files: Vec<TreeFile> = Vec::new();
+    for path in paths {
+        let name = path.file_name();
+        if name == ".git" {
+            let result: PathBuf = path
+                .path()
+                .parent()
+                .ok_or(anyhow::anyhow!("Error getting repository root directory"))?
+                .to_path_buf();
+            return Ok(result);
+        }
+    }
+    match dir.parent() {
+        Some(path) => get_repo_root(path.to_path_buf()),
+        None => {
+            anyhow::bail!("Couldn't find git repository here or in any of the parent directories")
+        }
+    }
+}
+
 fn sha_to_path(sha: &str) -> Result<PathBuf> {
-    let mut result = PathBuf::from(".git/objects/");
+    let mut result = get_repo_root(PathBuf::from("."))?;
+    result.push(".git");
+    result.push("objects");
     result.push(sha.chars().take(2).collect::<String>());
     result.push(sha.chars().skip(2).collect::<String>());
     Ok(result)
@@ -81,6 +111,18 @@ impl Object {
     }
     fn new_blob(content: String) -> Self {
         Self::new(ObjectType::Blob, content)
+    }
+    fn new_tree(content: Vec<TreeFile>) -> Result<Self> {
+        let mut result: Vec<u8> = Vec::new();
+        for file in content {
+            result.append(&mut format!("{} {}\0", file.mode, file.name).as_bytes().to_vec());
+            result.append(&mut hex::decode(file.sha)?);
+        }
+        Ok(Self {
+            object_type: ObjectType::Tree,
+            size: result.len(),
+            content: result,
+        })
     }
     fn hash(&self) -> String {
         let mut hasher = Sha1::new();
@@ -193,7 +235,7 @@ fn p_cat_file(blob_sha: &str) -> Result<()> {
     Ok(())
 }
 
-fn p_hash_object(file: &PathBuf) -> Result<()> {
+fn p_hash_object(file: &PathBuf) -> Result<String> {
     anyhow::ensure!(file.exists());
     let content = fs::read(file)?;
     let object = Object::new_blob(std::string::String::from_utf8(content)?);
@@ -203,8 +245,8 @@ fn p_hash_object(file: &PathBuf) -> Result<()> {
     std::fs::create_dir_all(&path.parent().ok_or(anyhow::anyhow!("Unreachable"))?)?;
     let mut file = File::create(path)?;
     file.write_all(&compressed)?;
-    println!("{hash}");
-    Ok(())
+    // println!("{hash}");
+    Ok(hash)
 }
 
 struct TreeFile {
@@ -238,16 +280,47 @@ fn p_ls_tree(name_only: bool, sha: &str) -> Result<()> {
         files.push(TreeFile {
             mode: file_mode.to_string(),
             name: file_name.to_string(),
-            sha: sha.to_string(),
+            sha: hex::encode(file_sha),
         })
         // files.push((file_mode.clone(), file_name.clone(), hex::encode(file_sha)));
         // files.push(String::from_utf8(file_header)?);
     }
     for file in files {
-        println!("{}", file.name);
+        match name_only {
+            true => println!("{}", file.name),
+            false => println!("{}\t{}\t\t\t{}", file.mode, file.name, file.sha),
+        }
     }
     // dbg!(files);
     Ok(())
+}
+
+fn p_write_tree(dir: PathBuf) -> Result<String> {
+    dbg!(&dir);
+    let paths = std::fs::read_dir(dir)?
+        .into_iter()
+        .collect::<std::result::Result<Vec<_>, std::io::Error>>()?;
+    let mut files: Vec<TreeFile> = Vec::new();
+    for path in paths {
+        let name = path.file_name();
+        dbg!(&name);
+        if name == ".git" {
+            continue;
+        }
+        let name = name
+            .to_str()
+            .ok_or(anyhow::anyhow!("Invalid unicode in filename"))?
+            .to_string();
+        let mode = std::fs::metadata(path.path())?.permissions().mode();
+        let mode = format!("{:0>6}", mode.to_string());
+        let sha = if path.path().is_dir() {
+            p_write_tree(path.path())?
+        } else {
+            p_hash_object(&path.path())?
+        };
+        files.push(TreeFile { mode, name, sha });
+    }
+    Ok(Object::new_tree(files)?.hash())
 }
 
 fn main() -> Result<()> {
@@ -256,7 +329,18 @@ fn main() -> Result<()> {
     match &cli.command {
         Commands::Init => g_init(),
         Commands::CatFile { blob_sha } => p_cat_file(blob_sha),
-        Commands::HashObject { file } => p_hash_object(file),
+        Commands::HashObject { file } => {
+            println!("{}", p_hash_object(file)?);
+            Ok(())
+        }
         Commands::LsTree { name_only, sha } => p_ls_tree(*name_only, sha),
+        Commands::WriteTree => {
+            println!("{}", p_write_tree(PathBuf::from("."))?);
+            Ok(())
+        }
+        Commands::Root => {
+            println!("{}", get_repo_root(PathBuf::from("."))?.display());
+            Ok(())
+        }
     }
 }
