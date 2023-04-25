@@ -242,7 +242,11 @@ fn p_hash_object(file: &PathBuf) -> Result<String> {
     let hash = object.hash();
     let compressed = object.compress()?;
     let path = sha_to_path(&hash)?;
+    if path.exists() {
+        return Ok(hash);
+    }
     std::fs::create_dir_all(&path.parent().ok_or(anyhow::anyhow!("Unreachable"))?)?;
+    // println!("{}", path.display());
     let mut file = File::create(path)?;
     file.write_all(&compressed)?;
     // println!("{hash}");
@@ -295,18 +299,65 @@ fn p_ls_tree(name_only: bool, sha: &str) -> Result<()> {
     Ok(())
 }
 
+fn should_ignore(cwd: PathBuf, file: PathBuf) -> Result<bool> {
+    let name = file
+        .file_name()
+        .ok_or(anyhow::anyhow!("Error getting file name"))?;
+    if name == ".git" {
+        return Ok(true);
+    }
+    let mut path_gitignore = get_repo_root(cwd.clone())?;
+    path_gitignore.push(".gitignore");
+    if !path_gitignore.exists() {
+        return Ok(false);
+    }
+    let mut ignores = String::new();
+    std::fs::File::open(path_gitignore)?.read_to_string(&mut ignores)?;
+    let repo_root = PathBuf::from(get_repo_root(cwd)?);
+    let ignores: Vec<_> = ignores
+        .split("\n")
+        .filter(|l| !l.is_empty() && !l.starts_with("#"))
+        .map(|l| {
+            if let Some(n) = l.chars().position(|c| c == '#') {
+                l.chars().take(n - 1).collect::<String>()
+            } else {
+                l.to_string()
+            }
+        })
+        .filter(|l| !l.contains("*")) // I won't implement * right now
+        .map(|l| {
+            let mut pb = repo_root.clone();
+            pb.push(l);
+            pb.canonicalize()
+        })
+        .filter_map(|p| p.ok())
+        .collect();
+    let file_path = file.canonicalize()?;
+    for ignore_pattern in ignores {
+        if file_path.starts_with(ignore_pattern) {
+            return Ok(true);
+        }
+    }
+    // dbg!(ignores, file_path);
+    Ok(false)
+}
+
 fn p_write_tree(dir: PathBuf) -> Result<String> {
-    dbg!(&dir);
-    let paths = std::fs::read_dir(dir)?
+    // dbg!(&dir);
+    let paths = std::fs::read_dir(dir.clone())?
         .into_iter()
         .collect::<std::result::Result<Vec<_>, std::io::Error>>()?;
     let mut files: Vec<TreeFile> = Vec::new();
     for path in paths {
         let name = path.file_name();
-        dbg!(&name);
-        if name == ".git" {
+        // dbg!(&name);
+        if should_ignore(dir.clone(), path.path())? {
+            println!("Ignoring {:?}", name);
             continue;
         }
+        // if name == ".git" {
+        //     continue;
+        // }
         let name = name
             .to_str()
             .ok_or(anyhow::anyhow!("Invalid unicode in filename"))?
@@ -314,13 +365,25 @@ fn p_write_tree(dir: PathBuf) -> Result<String> {
         let mode = std::fs::metadata(path.path())?.permissions().mode();
         let mode = format!("{:0>6}", mode.to_string());
         let sha = if path.path().is_dir() {
+            println!("descending into {}", path.path().display());
             p_write_tree(path.path())?
         } else {
+            println!("hashing {}", path.path().display());
             p_hash_object(&path.path())?
         };
         files.push(TreeFile { mode, name, sha });
     }
-    Ok(Object::new_tree(files)?.hash())
+    let obj = Object::new_tree(files)?;
+    let compressed = obj.compress()?;
+    let hash = obj.hash();
+    let path = sha_to_path(&hash)?;
+    if path.exists() {
+        return Ok(hash);
+    }
+    std::fs::create_dir_all(&path.parent().ok_or(anyhow::anyhow!("Unreachable"))?)?;
+    let mut file = File::create(path)?;
+    file.write_all(&compressed)?;
+    Ok(hash)
 }
 
 fn main() -> Result<()> {
