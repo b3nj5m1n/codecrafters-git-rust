@@ -363,7 +363,11 @@ fn p_write_tree(dir: PathBuf) -> Result<String> {
             .ok_or(anyhow::anyhow!("Invalid unicode in filename"))?
             .to_string();
         let mode = std::fs::metadata(path.path())?.permissions().mode();
-        let mode = format!("{:o}", mode);
+        let mode = if path.path().is_dir() {
+            "040000".to_string()
+        } else {
+            format!("{:o}", mode)
+        };
         let sha = if path.path().is_dir() {
             // println!("descending into {}", path.path().display());
             p_write_tree(path.path())?
