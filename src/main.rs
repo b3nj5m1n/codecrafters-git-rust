@@ -62,7 +62,8 @@ fn p_cat_file(blob_sha: &str) -> Result<()> {
     let path = sha_to_path(blob_sha)?;
     let content = fs::read(path)?;
     let object = Object::try_from(content)?;
-    print!("{}", object.content);
+    std::io::stdout().write_all(&object.content)?;
+    // print!("{}", String::from_utf8(object.content));
     Ok(())
 }
 
@@ -70,7 +71,7 @@ fn p_cat_file(blob_sha: &str) -> Result<()> {
 struct Object {
     object_type: ObjectType,
     size: usize,
-    content: String,
+    content: Vec<u8>,
 }
 
 impl Object {
@@ -78,7 +79,7 @@ impl Object {
         Self {
             object_type,
             size: content.len(),
-            content,
+            content: content.as_bytes().to_vec(),
         }
     }
     fn new_blob(content: String) -> Self {
@@ -102,13 +103,10 @@ impl Object {
 
 impl Into<Vec<u8>> for Object {
     fn into(self) -> Vec<u8> {
-        format!(
-            "{0} {1}\0{2}",
-            self.object_type.to_string(),
-            self.size,
-            self.content
-        )
-        .into_bytes()
+        let mut r = format!("{0} {1}\0", self.object_type.to_string(), self.size,).into_bytes();
+        r.append(&mut self.content.clone());
+        r
+        // self.content
     }
 }
 
@@ -117,20 +115,28 @@ impl TryFrom<Vec<u8>> for Object {
 
     fn try_from(value: Vec<u8>) -> std::result::Result<Self, Self::Error> {
         let mut decompressor = flate2::read::ZlibDecoder::new(&value[..]);
-        let mut result = String::new();
-        decompressor.read_to_string(&mut result)?;
-        let (header, content) = result
-            .split_once("\0")
-            .ok_or(anyhow::anyhow!("Couldn't parse git object"))?;
-        let (object_type_str, size_str) = header.split_once(" ").ok_or(anyhow::anyhow!(
-            "Couldn't parse git object header: {header}"
-        ))?;
+        let mut result: Vec<u8> = Vec::new(); // String::new();
+        decompressor.read_to_end(&mut result)?;
+        // decompressor.read_to_string(&mut result)?;
+        let (header, content) = result.split_at(
+            result
+                .iter()
+                .position(|&x| x == 0_u8)
+                .ok_or(anyhow::anyhow!("Couldn't parse header of object"))?,
+        );
+        let header = String::from_utf8(header.to_vec())?;
+
+        // .split_once(\0)
+        // .ok_or(anyhow::anyhow!("Couldn't parse git object"))?;
+        let (object_type_str, size_str) = header
+            .split_once(" ")
+            .ok_or(anyhow::anyhow!("Couldn't parse git object header"))?;
         let size = size_str.parse::<usize>()?;
         let object_type = ObjectType::try_from(object_type_str)?;
         Ok(Self {
             object_type,
             size,
-            content: content.to_string(),
+            content: content.to_vec(),
         })
     }
 }
@@ -138,12 +144,16 @@ impl TryFrom<Vec<u8>> for Object {
 #[derive(Clone)]
 enum ObjectType {
     Blob,
+    Tree,
+    Commit,
 }
 
 impl ToString for ObjectType {
     fn to_string(&self) -> String {
         match self {
             ObjectType::Blob => String::from("blob"),
+            ObjectType::Tree => String::from("tree"),
+            ObjectType::Commit => String::from("commit"),
         }
     }
 }
@@ -154,6 +164,8 @@ impl TryFrom<&str> for ObjectType {
     fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
         match value {
             "blob" => Ok(Self::Blob),
+            "tree" => Ok(Self::Tree),
+            "commit" => Ok(Self::Commit),
             _ => anyhow::bail!("Couldn't determine object type: {}", value.to_string()),
         }
     }
@@ -166,7 +178,7 @@ fn p_hash_object(file: &PathBuf) -> Result<()> {
     let hash = object.hash();
     let compressed = object.compress()?;
     let path = sha_to_path(&hash)?;
-    std::fs::create_dir_all(&path.parent().ok_or(anyhow::anyhow!("Unreachable"))?);
+    std::fs::create_dir_all(&path.parent().ok_or(anyhow::anyhow!("Unreachable"))?)?;
     let mut file = File::create(path)?;
     file.write_all(&compressed)?;
     println!("{hash}");
