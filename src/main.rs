@@ -292,7 +292,7 @@ fn p_ls_tree(name_only: bool, sha: &str) -> Result<()> {
     for file in files {
         match name_only {
             true => println!("{}", file.name),
-            false => println!("{}\t{}\t\t\t{}", file.mode, file.name, file.sha),
+            false => println!("{:0>6} {} {}", file.mode, file.sha, file.name,),
         }
     }
     // dbg!(files);
@@ -352,7 +352,7 @@ fn p_write_tree(dir: PathBuf) -> Result<String> {
         let name = path.file_name();
         // dbg!(&name);
         if should_ignore(dir.clone(), path.path())? {
-            println!("Ignoring {:?}", name);
+            // println!("Ignoring {:?}", name);
             continue;
         }
         // if name == ".git" {
@@ -363,16 +363,17 @@ fn p_write_tree(dir: PathBuf) -> Result<String> {
             .ok_or(anyhow::anyhow!("Invalid unicode in filename"))?
             .to_string();
         let mode = std::fs::metadata(path.path())?.permissions().mode();
-        let mode = format!("{:0>6}", mode.to_string());
+        let mode = format!("{:o}", mode);
         let sha = if path.path().is_dir() {
-            println!("descending into {}", path.path().display());
+            // println!("descending into {}", path.path().display());
             p_write_tree(path.path())?
         } else {
-            println!("hashing {}", path.path().display());
+            // println!("hashing {}", path.path().display());
             p_hash_object(&path.path())?
         };
         files.push(TreeFile { mode, name, sha });
     }
+    files.sort_by(|a, b| a.name.cmp(&b.name));
     let obj = Object::new_tree(files)?;
     let compressed = obj.compress()?;
     let hash = obj.hash();
