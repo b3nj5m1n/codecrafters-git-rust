@@ -159,7 +159,7 @@ impl Object {
             .as_bytes()
             .to_vec(),
         );
-        result.append(&mut message.as_bytes().to_vec());
+        result.append(&mut format!("{}\n", message).as_bytes().to_vec());
         // for file in content {
         //     result.append(&mut hex::decode(file.sha)?);
         // }
