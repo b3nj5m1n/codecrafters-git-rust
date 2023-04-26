@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -49,6 +50,15 @@ enum Commands {
     },
     WriteTree,
     Root,
+    CommitTree {
+        tree_sha: String,
+
+        #[arg(short = 'p')]
+        parent_commit_sha: String,
+
+        #[arg(short = 'm')]
+        message: String,
+    },
 }
 
 fn g_init() -> Result<()> {
@@ -120,6 +130,41 @@ impl Object {
         }
         Ok(Self {
             object_type: ObjectType::Tree,
+            size: result.len(),
+            content: result,
+        })
+    }
+    fn new_commit(tree_sha: &String, parent_commit_sha: &String, message: &String) -> Result<Self> {
+        let mut result: Vec<u8> = Vec::new();
+        result.append(&mut format!("tree {}\n", tree_sha).as_bytes().to_vec());
+        result.append(
+            &mut format!("parent {}\n", parent_commit_sha)
+                .as_bytes()
+                .to_vec(),
+        );
+        // Doesn't exactly ✌️work✌️ yk
+        // Would have to figure out timezone and I'm too lazy to do that with the std library
+        let time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(); // - 2 * 3600;
+        let offset = "+0200";
+        result.append(
+            &mut format!("author b3nj5m1n <b3nj4m1n@gmx.net> {} {offset}\n", time,)
+                .as_bytes()
+                .to_vec(),
+        );
+        result.append(
+            &mut format!(
+                "committer b3nj5m1n <b3nj4m1n@gmx.net> {} {offset}\n\n",
+                time,
+            )
+            .as_bytes()
+            .to_vec(),
+        );
+        result.append(&mut message.as_bytes().to_vec());
+        // for file in content {
+        //     result.append(&mut hex::decode(file.sha)?);
+        // }
+        Ok(Self {
+            object_type: ObjectType::Commit,
             size: result.len(),
             content: result,
         })
@@ -391,6 +436,24 @@ fn p_write_tree(dir: PathBuf) -> Result<String> {
     Ok(hash)
 }
 
+fn p_commit_tree(
+    tree_sha: &String,
+    parent_commit_sha: &String,
+    message: &String,
+) -> Result<String> {
+    let obj = Object::new_commit(tree_sha, parent_commit_sha, message)?;
+    let compressed = obj.compress()?;
+    let hash = obj.hash();
+    let path = sha_to_path(&hash)?;
+    if path.exists() {
+        return Ok(hash);
+    }
+    std::fs::create_dir_all(&path.parent().ok_or(anyhow::anyhow!("Unreachable"))?)?;
+    let mut file = File::create(path)?;
+    file.write_all(&compressed)?;
+    Ok(hash)
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -408,6 +471,14 @@ fn main() -> Result<()> {
         }
         Commands::Root => {
             println!("{}", get_repo_root(PathBuf::from("."))?.display());
+            Ok(())
+        }
+        Commands::CommitTree {
+            tree_sha,
+            parent_commit_sha,
+            message,
+        } => {
+            println!("{}", p_commit_tree(tree_sha, parent_commit_sha, message)?);
             Ok(())
         }
     }
